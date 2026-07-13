@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Esamco - المساعد الذكي</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <script src="https://cdn.jsdelivr.net/npm/marked@15.0.7/marked.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Esamco المساعد الذكي</h1>
+            <p>اطرح سؤالاً عن المستندات المرفوعة</p>
+        </header>
+
+        <div class="upload-section">
+            <h3>رفع مستند</h3>
+            <form id="uploadForm" enctype="multipart/form-data">
+                <input type="file" name="file" accept=".pdf,.docx,.doc" id="fileInput">
+                <button type="submit" id="uploadBtn">رفع</button>
+            </form>
+            <div id="uploadStatus"></div>
+        </div>
+
+        <div class="chat-section">
+            <div class="messages" id="messages">
+                <div class="message bot">
+                    مرحباً! ارفع مستنداً ثم اطرح سؤالاً عنه.
+                </div>
+            </div>
+
+            <form id="chatForm" class="input-area">
+                <input type="text" id="queryInput" placeholder="اكتب سؤالك هنا..." autocomplete="off" maxlength="500">
+                <button type="submit" id="sendBtn">إرسال</button>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        const uploadForm = document.getElementById('uploadForm');
+        const uploadStatus = document.getElementById('uploadStatus');
+        const chatForm = document.getElementById('chatForm');
+        const queryInput = document.getElementById('queryInput');
+        const messages = document.getElementById('messages');
+        const sendBtn = document.getElementById('sendBtn');
+
+        const messageQueue = [];
+        let processing = false;
+        let currentAbort = null;
+        let msgCounter = 0;
+        let editingId = null;
+
+        uploadForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const file = document.getElementById('fileInput').files[0];
+            if (!file) return;
+
+            const formData = new FormData();
+            formData.append('file', file);
+
+            uploadStatus.textContent = 'جاري رفع المستند...';
+            uploadStatus.className = '';
+
+            try {
+                const res = await fetch('/upload', { method: 'POST', body: formData });
+                const data = await res.json();
+                if (res.ok) {
+                    uploadStatus.textContent = `تم رفع ${data.chunks_count} مقطع بنجاح`;
+                    uploadStatus.className = 'success';
+                } else {
+                    uploadStatus.textContent = `خطأ: ${data.detail || 'فشل الرفع'}`;
+                    uploadStatus.className = 'error';
+                }
+            } catch (err) {
+                uploadStatus.textContent = 'خطأ في الاتصال';
+                uploadStatus.className = 'error';
+            }
+        });
+
+        function stopCurrent() {
+            if (currentAbort) {
+                currentAbort.abort();
+                currentAbort = null;
+            }
+            processing = false;
+            messageQueue.length = 0;
+            const loadingEls = document.querySelectorAll('[id^="loading-"]');
+            loadingEls.forEach(el => {
+                if (el.dataset.stopped) return;
+                el.dataset.stopped = '1';
+                el.innerHTML = '⏹️ تم الإيقاف';
+            });
+        }
+
+        function editMessage(msgId) {
+            const userEl = document.getElementById('user-' + msgId);
+            if (!userEl) return;
+            const text = userEl.dataset.text;
+            queryInput.value = text;
+            editingId = msgId;
+            queryInput.focus();
+        }
+
+        function processQueue() {
+            if (processing || messageQueue.length === 0) return;
+            if (editingId) {
+                const existing = document.getElementById('bot-' + editingId);
+                if (existing) existing.remove();
+                const userEl = document.getElementById('user-' + editingId);
+                if (userEl) userEl.remove();
+                editingId = null;
+            }
+
+            processing = true;
+
+            const { query, loadingId, msgId } = messageQueue.shift();
+
+            const stepIds = ['analyze', 'identify', 'gather', 'generate'];
+            const stepDurations = [1500, 2000, 3000, 0];
+            let stepIndex = 0;
+
+            function advanceStep() {
+                if (stepIndex > 0) {
+                    const prev = document.getElementById('step-' + stepIds[stepIndex - 1] + '-' + loadingId);
+                    if (prev) {
+                        prev.classList.remove('active');
+                        prev.classList.add('done');
+                        prev.querySelector('.step-icon').textContent = '✓';
+                    }
+                }
+                if (stepIndex < stepIds.length) {
+                    const cur = document.getElementById('step-' + stepIds[stepIndex] + '-' + loadingId);
+                    if (cur) {
+                        cur.classList.add('active');
+                        cur.querySelector('.step-icon').textContent = '⏳';
+                    }
+                }
+                if (stepIndex < stepIds.length - 1) {
+                    stepTimer = setTimeout(advanceStep, stepDurations[stepIndex]);
+                    stepIndex++;
+                }
+            }
+
+            let stepTimer = setTimeout(advanceStep, 100);
+
+            const controller = new AbortController();
+            currentAbort = controller;
+
+            fetch('/chat', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ query }),
+                signal: controller.signal,
+            })
+                .then(async res => {
+                    const data = await res.json();
+                    clearTimeout(stepTimer);
+                    stepIds.forEach(id => {
+                        const el = document.getElementById('step-' + id + '-' + loadingId);
+                        if (el) {
+                            el.classList.remove('active');
+                            el.classList.add('done');
+                            el.querySelector('.step-icon').textContent = '✓';
+                        }
+                    });
+                    if (controller.signal.aborted) return;
+
+                    let html = marked.parse(data.answer);
+                    if (data.latency_ms != null) {
+                        const secs = (data.latency_ms / 1000).toFixed(1);
+                        html += `<div class="latency">⏱ ${secs} ثانية</div>`;
+                    }
+                    if (data.sources && data.sources.length > 0) {
+                        html += `<div class="sources"><strong>المصادر:</strong><ul>`;
+                        data.sources.slice(0, 3).forEach(s => {
+                            const pct = Math.round(Math.max(0, Math.min(s.score, 1)) * 100);
+                            html += `<li>${s.document} (${pct}%)</li>`;
+                        });
+                        html += `</ul></div>`;
+                    }
+                    const el = document.getElementById(loadingId);
+                    if (el) el.innerHTML = html;
+                })
+                .catch(err => {
+                    clearTimeout(stepTimer);
+                    if (err.name === 'AbortError') return;
+                    const el = document.getElementById(loadingId);
+                    if (el) el.innerHTML = '❌ خطأ في الاتصال بالخادم';
+                })
+                .finally(() => {
+                    if (currentAbort === controller) currentAbort = null;
+                    processing = false;
+                    messages.scrollTop = messages.scrollHeight;
+                    setTimeout(() => processQueue(), 300);
+                });
+        }
+
+        const MAX_QUERY_LEN = 500;
+
+        function addMessage(query, msgId) {
+            messages.innerHTML += `
+                <div class="message user" id="user-${msgId}" data-text="${query.replace(/"/g, '&quot;')}">
+                    ${query}
+                    <button class="msg-btn edit-btn" onclick="editMessage('${msgId}')" title="تعديل">✏️</button>
+                </div>`;
+            messages.scrollTop = messages.scrollHeight;
+
+            const loadingId = 'loading-' + msgId;
+            messages.innerHTML += `
+                <div class="message bot" id="${loadingId}">
+                    <div class="process-steps" id="steps-${loadingId}">
+                        <div class="step" id="step-analyze-${loadingId}">
+                            <span class="step-icon">⏳</span>
+                            <span class="step-text">تحليل الطلب</span>
+                        </div>
+                        <div class="step" id="step-identify-${loadingId}">
+                            <span class="step-icon"></span>
+                            <span class="step-text">تحديد المفاتيح</span>
+                        </div>
+                        <div class="step" id="step-gather-${loadingId}">
+                            <span class="step-icon"></span>
+                            <span class="step-text">جمع المعلومات</span>
+                        </div>
+                        <div class="step" id="step-generate-${loadingId}">
+                            <span class="step-icon"></span>
+                            <span class="step-text">توليد الإجابة</span>
+                        </div>
+                    </div>
+                    <button class="msg-btn stop-btn" onclick="stopCurrent()" title="إيقاف">⏹️</button>
+                </div>`;
+            messages.scrollTop = messages.scrollHeight;
+
+            messageQueue.push({ query, loadingId, msgId });
+            processQueue();
+        }
+
+        chatForm.addEventListener('submit', (e) => {
+            e.preventDefault();
+            const query = queryInput.value.trim();
+            if (!query) return;
+            if (query.length > MAX_QUERY_LEN) {
+                queryInput.value = '';
+                messages.innerHTML += `<div class="message user">${query.substring(0, 80)}...</div>`;
+                messages.innerHTML += `<div class="message bot" style="color:#dc2626;">⚠️ السؤال طويل جداً (الحد الأقصى ${MAX_QUERY_LEN} حرف)</div>`;
+                messages.scrollTop = messages.scrollHeight;
+                return;
+            }
+            queryInput.value = '';
+            msgCounter++;
+            addMessage(query, msgCounter);
+        });
+    </script>
+</body>
+</html>
