@@ -11,13 +11,13 @@ UPLOADS_DIR = BASE_DIR / "uploads"
 os.makedirs(CHROMA_DB_DIR, exist_ok=True)
 os.makedirs(UPLOADS_DIR, exist_ok=True)
 
-LLM_MODEL = "qwen3:1.7b"
+LLM_MODEL = "llama-3.3-70b-versatile"
 EMBEDDING_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 CHUNK_SIZE = 512
 CHUNK_OVERLAP = 50
-TOP_K = 5
+TOP_K = 8
 
-OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 LLM_TEMPERATURE = 0.3
 LLM_MAX_TOKENS = 2048
 

@@ -1,16 +1,16 @@
 import time
-import httpx
+
 from app.config import (
     COLLECTION_NAME, CHROMA_DB_DIR, TOP_K,
-    OLLAMA_BASE_URL, LLM_MODEL, LLM_TEMPERATURE, LLM_MAX_TOKENS,
+    LLM_MODEL, LLM_TEMPERATURE, LLM_MAX_TOKENS,
     LLM_ERROR_PREFIX, HUMAN_REQUEST_KEYWORDS, NO_ANSWER_PATTERNS, NO_ANSWER_MARKER,
 )
 from app.core.embeddings import embed_query
 import chromadb
 
-_collection = None
-_llm_client = None
+from app.core.groq_client import call_groq
 
+_collection = None
 
 def get_chroma_collection():
     global _collection
@@ -18,13 +18,6 @@ def get_chroma_collection():
         client = chromadb.PersistentClient(str(CHROMA_DB_DIR))
         _collection = client.get_or_create_collection(COLLECTION_NAME)
     return _collection
-
-
-def get_llm_client():
-    global _llm_client
-    if _llm_client is None:
-        _llm_client = httpx.Client(timeout=300)
-    return _llm_client
 
 
 GREETINGS = {"اهلا", "مرحبا", "hello", "hi", "hey", "سلام", "السلام عليكم", "تحية"}
@@ -43,25 +36,6 @@ def contains_human_request_keyword(query: str) -> bool:
 def is_no_answer(answer: str) -> bool:
     return NO_ANSWER_MARKER in answer or any(pattern in answer for pattern in NO_ANSWER_PATTERNS)
 
-
-def call_llm(prompt: str) -> str:
-    payload = {
-        "model": LLM_MODEL,
-        "prompt": prompt,
-        "stream": False,
-        "temperature": LLM_TEMPERATURE,
-        "options": {"num_predict": LLM_MAX_TOKENS},
-    }
-    try:
-        client = get_llm_client()
-        resp = client.post(
-            f"{OLLAMA_BASE_URL}/api/generate",
-            json=payload,
-        )
-        resp.raise_for_status()
-        return resp.json().get("response", "")
-    except Exception as e:
-        return f"{LLM_ERROR_PREFIX}: {str(e)}"
 
 
 def build_prompt(query: str, context_chunks: list[str]) -> str:
@@ -117,7 +91,7 @@ def answer_query(query: str) -> dict:
 
     if not results or not results["documents"] or not results["documents"][0]:
         prompt = build_no_context_prompt(query)
-        answer = call_llm(prompt)
+        answer = call_groq(prompt)
         elapsed = int((time.time() - start) * 1000)
         # No retrieved context at all is itself a low-confidence signal, so this
         # path always escalates regardless of keywords/LLM outcome.
@@ -127,8 +101,9 @@ def answer_query(query: str) -> dict:
     metadatas = results["metadatas"][0]
     distances = results["distances"][0]
 
+
     prompt = build_prompt(query, documents)
-    answer = call_llm(prompt)
+    answer = call_groq(prompt)
 
     sources = []
     raw_dists = [
