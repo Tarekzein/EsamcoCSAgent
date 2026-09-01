@@ -63,7 +63,7 @@ GROQ_API_KEY=gsk_your_key_here
 Everything else (model names, chunk size, top-K, escalation keywords) is
 hardcoded in [app/config.py](app/config.py), not env-driven:
 
-- LLM: `llama-3.3-70b-versatile` (Groq)
+- LLM: `LLM_MODEL=openai/gpt-oss-20b` (Groq)
 - Embeddings: `paraphrase-multilingual-MiniLM-L12-v2` (384-dim, local)
 - Chunking: 512 chars / 50 overlap, top-K 8
 

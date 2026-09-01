@@ -11,7 +11,7 @@ UPLOADS_DIR = BASE_DIR / "uploads"
 os.makedirs(CHROMA_DB_DIR, exist_ok=True)
 os.makedirs(UPLOADS_DIR, exist_ok=True)
 
-LLM_MODEL = "llama-3.3-70b-versatile"
+LLM_MODEL = os.getenv("LLM_MODEL", "openai/gpt-oss-20b")
 EMBEDDING_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 CHUNK_SIZE = 512
 CHUNK_OVERLAP = 50
